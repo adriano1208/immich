@@ -31,10 +31,12 @@ class ServerInfoNotifier extends StateNotifier<ServerInfo> {
   final ServerInfoService _serverInfoService;
   final _log = Logger("ServerInfoNotifier");
 
+  void markServerUnreachable() {
+    state = state.copyWith(versionStatus: VersionStatus.error);
+  }
+
   Future<ServerInfo> getServerInfo() async {
-    await getServerVersion();
-    await getServerFeatures();
-    await getServerConfig();
+    await Future.wait([getServerVersion(), getServerFeatures(), getServerConfig()]);
     return state;
   }
 
@@ -56,7 +58,7 @@ class ServerInfoNotifier extends StateNotifier<ServerInfo> {
     }
   }
 
-  _checkServerVersionMismatch(ServerVersion serverVersion, {ServerVersion? latestVersion}) async {
+  Future<void> _checkServerVersionMismatch(ServerVersion serverVersion, {ServerVersion? latestVersion}) async {
     state = state.copyWith(serverVersion: serverVersion, latestVersion: latestVersion);
 
     var packageInfo = await PackageInfo.fromPlatform();
@@ -75,12 +77,12 @@ class ServerInfoNotifier extends StateNotifier<ServerInfo> {
     state = state.copyWith(versionStatus: VersionStatus.upToDate);
   }
 
-  handleReleaseInfo(ServerVersion serverVersion, ServerVersion? latestVersion) {
+  Future<void> handleReleaseInfo(ServerVersion serverVersion, ServerVersion? latestVersion) async {
     // Update local server version
-    _checkServerVersionMismatch(serverVersion, latestVersion: latestVersion);
+    await _checkServerVersionMismatch(serverVersion, latestVersion: latestVersion);
   }
 
-  getServerFeatures() async {
+  Future<void> getServerFeatures() async {
     final serverFeatures = await _serverInfoService.getServerFeatures();
     if (serverFeatures == null) {
       return;
@@ -88,7 +90,7 @@ class ServerInfoNotifier extends StateNotifier<ServerInfo> {
     state = state.copyWith(serverFeatures: serverFeatures);
   }
 
-  getServerConfig() async {
+  Future<void> getServerConfig() async {
     final serverConfig = await _serverInfoService.getServerConfig();
     if (serverConfig == null) {
       return;

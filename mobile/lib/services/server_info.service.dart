@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/models/server_info/server_config.model.dart';
 import 'package:immich_mobile/models/server_info/server_disk_info.model.dart';
@@ -13,6 +15,7 @@ class ServerInfoService {
   final ApiService _apiService;
 
   const ServerInfoService(this._apiService);
+  static const Duration _versionRequestTimeout = Duration(seconds: 2);
 
   Future<ServerDiskInfo?> getDiskInfo() async {
     try {
@@ -28,7 +31,7 @@ class ServerInfoService {
 
   Future<ServerVersion?> getServerVersion() async {
     try {
-      final dto = await _apiService.serverInfoApi.getServerVersion();
+      final dto = await _apiService.serverInfoApi.getServerVersion().timeout(_versionRequestTimeout);
       if (dto != null) {
         return ServerVersion.fromDto(dto);
       }

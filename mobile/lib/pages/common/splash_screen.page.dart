@@ -288,14 +288,18 @@ class SplashScreenPageState extends ConsumerState<SplashScreenPage> {
   @override
   void initState() {
     super.initState();
-    ref
-        .read(authProvider.notifier)
-        .setOpenApiServiceEndpoint()
-        .then(logConnectionInfo)
-        .whenComplete(() => resumeSession());
+    unawaited(_loadConnectionInfo());
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(resumeSession()));
   }
 
-  void logConnectionInfo(String? endpoint) {
+  Future<void> _loadConnectionInfo() async {
+    try {
+      final endpoint = await ref.read(authProvider.notifier).setOpenApiServiceEndpoint();
+      _logConnectionInfo(endpoint);
+    } catch (_) {}
+  }
+
+  void _logConnectionInfo(String? endpoint) {
     if (endpoint == null) {
       return;
     }
@@ -303,7 +307,7 @@ class SplashScreenPageState extends ConsumerState<SplashScreenPage> {
     log.info("Resuming session at $endpoint");
   }
 
-  void resumeSession() async {
+  Future<void> resumeSession() async {
     final serverUrl = Store.tryGet(StoreKey.serverUrl);
     final endpoint = Store.tryGet(StoreKey.serverEndpoint);
     final accessToken = Store.tryGet(StoreKey.accessToken);
@@ -314,57 +318,62 @@ class SplashScreenPageState extends ConsumerState<SplashScreenPage> {
       final backgroundManager = ref.read(backgroundSyncProvider);
       final backupProvider = ref.read(driftBackupProvider.notifier);
 
+      final isSuccess = await ref
+          .read(authProvider.notifier)
+          .saveAuthInfo(accessToken: accessToken, refreshUser: false);
+      if (!mounted) {
+        return;
+      }
+
+      if (!isSuccess) {
+        unawaited(ref.read(authProvider.notifier).logout());
+        unawaited(context.replaceRoute(const LoginRoute()));
+        return;
+      }
+
+      if (context.router.current.name == SplashScreenRoute.name) {
+        unawaited(context.replaceRoute(const TabShellRoute()));
+      }
+
       unawaited(
-        ref.read(authProvider.notifier).saveAuthInfo(accessToken: accessToken).then(
-          (_) async {
-            try {
-              wsProvider.connect();
-              unawaited(infoProvider.getServerInfo());
+        Future.delayed(Duration.zero, () async {
+          try {
+            wsProvider.connect();
+            unawaited(infoProvider.getServerInfo());
 
-              bool syncSuccess = false;
+            bool syncSuccess = false;
+            await Future.wait([
+              backgroundManager.syncLocal(full: true),
+              backgroundManager.syncRemote().then((success) => syncSuccess = success),
+            ]);
+
+            if (syncSuccess) {
               await Future.wait([
-                backgroundManager.syncLocal(full: true),
-                backgroundManager.syncRemote().then((success) => syncSuccess = success),
+                backgroundManager.hashAssets().then((_) {
+                  _resumeBackup(backupProvider);
+                }),
+                _resumeBackup(backupProvider),
+                // TODO: Bring back when the soft freeze issue is addressed
+                // backgroundManager.syncCloudIds(),
               ]);
-
-              if (syncSuccess) {
-                await Future.wait([
-                  backgroundManager.hashAssets().then((_) {
-                    _resumeBackup(backupProvider);
-                  }),
-                  _resumeBackup(backupProvider),
-                  // TODO: Bring back when the soft freeze issue is addressed
-                  // backgroundManager.syncCloudIds(),
-                ]);
-              } else {
-                await backgroundManager.hashAssets();
-              }
-
-              if (Store.get(StoreKey.syncAlbums, false)) {
-                await backgroundManager.syncLinkedAlbum();
-              }
-            } catch (e) {
-              log.severe('Failed establishing connection to the server: $e');
+            } else {
+              await backgroundManager.hashAssets();
             }
-          },
-          onError: (exception) => {
-            log.severe('Failed to update auth info with access token: $accessToken'),
-            ref.read(authProvider.notifier).logout(),
-            context.replaceRoute(const LoginRoute()),
-          },
-        ),
+
+            if (Store.get(StoreKey.syncAlbums, false)) {
+              await backgroundManager.syncLinkedAlbum();
+            }
+          } catch (error, stackTrace) {
+            log.severe('Failed establishing connection to the server', error, stackTrace);
+          }
+        }),
       );
+      return;
     } else {
       log.severe('Missing crucial offline login info - Logging out completely');
       unawaited(ref.read(authProvider.notifier).logout());
       unawaited(context.replaceRoute(const LoginRoute()));
       return;
-    }
-
-    // clean install - change the default of the flag
-    // current install not using beta timeline
-    if (context.router.current.name == SplashScreenRoute.name) {
-      unawaited(context.replaceRoute(const TabShellRoute()));
     }
   }
 

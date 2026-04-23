@@ -43,6 +43,7 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
 
   final _log = Logger('WebsocketNotifier');
   final Ref _ref;
+  bool _manualDisconnect = false;
 
   final Debouncer _batchDebouncer = Debouncer(
     interval: const Duration(seconds: 5),
@@ -58,6 +59,7 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
 
   /// Connects websocket to server unless already connected
   void connect() {
+    _manualDisconnect = false;
     if (state.isConnected) return;
     final authenticationState = _ref.read(authProvider);
 
@@ -82,10 +84,15 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
         socket.onConnect((_) {
           dPrint(() => "Established Websocket Connection");
           state = WebsocketState(isConnected: true, socket: socket);
+          unawaited(_ref.read(serverInfoProvider.notifier).getServerVersion());
         });
 
         socket.onDisconnect((_) {
           dPrint(() => "Disconnect to Websocket Connection");
+          if (!_manualDisconnect) {
+            _ref.read(serverInfoProvider.notifier).markServerUnreachable();
+          }
+          _manualDisconnect = false;
           state = const WebsocketState(isConnected: false, socket: null);
         });
 
@@ -107,6 +114,7 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
   void disconnect() {
     dPrint(() => "Attempting to disconnect from websocket");
 
+    _manualDisconnect = true;
     _batchedAssetUploadReady.clear();
 
     state.socket?.dispose();
@@ -135,11 +143,11 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
   }
 
   void _handleOnConfigUpdate(dynamic _) {
-    _ref.read(serverInfoProvider.notifier).getServerFeatures();
-    _ref.read(serverInfoProvider.notifier).getServerConfig();
+    unawaited(_ref.read(serverInfoProvider.notifier).getServerFeatures());
+    unawaited(_ref.read(serverInfoProvider.notifier).getServerConfig());
   }
 
-  _handleReleaseUpdates(dynamic data) {
+  void _handleReleaseUpdates(dynamic data) {
     // Json guard
     if (data is! Map) {
       return;
@@ -160,7 +168,7 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
 
     final serverVersion = ServerVersion.fromDto(serverVersionDto);
     final releaseVersion = ServerVersion.fromDto(releaseVersionDto);
-    _ref.read(serverInfoProvider.notifier).handleReleaseInfo(serverVersion, releaseVersion);
+    unawaited(_ref.read(serverInfoProvider.notifier).handleReleaseInfo(serverVersion, releaseVersion));
   }
 
   void _handleSyncAssetUploadReady(dynamic data) {

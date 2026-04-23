@@ -17,20 +17,25 @@ class AuthGuard extends AutoRouteGuard {
   final _log = Logger("AuthGuard");
   AuthGuard(this._apiService, this._authService);
   @override
-  void onNavigation(NavigationResolver resolver, StackRouter router) async {
+  void onNavigation(NavigationResolver resolver, StackRouter router) {
     resolver.next(true);
+    unawaited(_validateAccessToken(router));
+  }
 
+  Future<void> _validateAccessToken(StackRouter router) async {
     try {
       // Look in the store for an access token
       Store.get(StoreKey.accessToken);
 
       // Validate the access token with the server
-      final res = await _apiService.authenticationApi.validateAccessToken();
+      final res = await _apiService.authenticationApi.validateAccessToken().timeout(const Duration(seconds: 5));
       if (res == null || res.authStatus != true) {
         // If the access token is invalid, take user back to login
         _log.fine('User token is invalid. Redirecting to login');
         unawaited(router.replaceAll([const LoginRoute()]).then((_) => _authService.clearLocalData()));
       }
+    } on TimeoutException catch (_) {
+      _log.warning("Timed out validating access token. Continuing with cached session.");
     } on StoreKeyNotFoundException catch (_) {
       // If there is no access token, take us to the login page
       _log.warning('No access token in the store.');

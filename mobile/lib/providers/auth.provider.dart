@@ -122,7 +122,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  Future<bool> saveAuthInfo({required String accessToken}) async {
+  Future<bool> saveAuthInfo({required String accessToken, bool refreshUser = true}) async {
     await Store.put(StoreKey.accessToken, accessToken);
     await _apiService.updateHeaders();
 
@@ -135,26 +135,32 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
     UserDto? user = _userService.tryGetMyUser();
 
-    try {
-      final serverUser = await _userService.refreshMyUser().timeout(_timeoutDuration);
-      if (serverUser == null) {
-        _log.severe("Unable to get user information from the server.");
-      } else {
-        // If the user information is successfully retrieved, update the store
-        // Due to the flow of the code, this will always happen on first login
-        user = serverUser;
-        await Store.put(StoreKey.deviceId, deviceId);
-        await Store.put(StoreKey.deviceIdHash, fastHash(deviceId));
+    if (refreshUser) {
+      try {
+        final serverUser = await _userService.refreshMyUser().timeout(_timeoutDuration);
+        if (serverUser == null) {
+          _log.severe("Unable to get user information from the server.");
+        } else {
+          // If the user information is successfully retrieved, update the store
+          // Due to the flow of the code, this will always happen on first login
+          user = serverUser;
+          await Store.put(StoreKey.currentUser, user);
+          await Store.put(StoreKey.deviceId, deviceId);
+          await Store.put(StoreKey.deviceIdHash, fastHash(deviceId));
+        }
+      } on ApiException catch (error, stackTrace) {
+        if (error.code == 401) {
+          _log.severe("Unauthorized access, token likely expired. Logging out.");
+          return false;
+        }
+        _log.severe("Error getting user information from the server [API EXCEPTION]", stackTrace);
+      } catch (error, stackTrace) {
+        _log.severe("Error getting user information from the server [CATCH ALL]", error, stackTrace);
+        dPrint(() => "Error getting user information from the server [CATCH ALL] $error $stackTrace");
       }
-    } on ApiException catch (error, stackTrace) {
-      if (error.code == 401) {
-        _log.severe("Unauthorized access, token likely expired. Logging out.");
-        return false;
-      }
-      _log.severe("Error getting user information from the server [API EXCEPTION]", stackTrace);
-    } catch (error, stackTrace) {
-      _log.severe("Error getting user information from the server [CATCH ALL]", error, stackTrace);
-      dPrint(() => "Error getting user information from the server [CATCH ALL] $error $stackTrace");
+    } else {
+      await Store.put(StoreKey.deviceId, deviceId);
+      await Store.put(StoreKey.deviceIdHash, fastHash(deviceId));
     }
 
     // If the user is null, the login was not successful
