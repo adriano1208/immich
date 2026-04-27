@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:background_downloader/background_downloader.dart';
 import 'package:collection/collection.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:logging/logging.dart';
@@ -199,14 +201,28 @@ class DriftBackupNotifier extends StateNotifier<DriftBackupState> {
           uploadItems: {},
           error: BackupError.none,
         ),
-      );
+      ) {
+    if (Platform.isAndroid) {
+      _progressSub = _backgroundUploadService.taskProgressStream.listen(_handleBackgroundTaskProgress);
+      _statusSub = _backgroundUploadService.taskStatusStream.listen(_handleBackgroundTaskStatus);
+    }
+  }
 
   final ForegroundUploadService _foregroundUploadService;
   final BackgroundUploadService _backgroundUploadService;
   final UploadSpeedManager _uploadSpeedManager;
   Completer<void>? _cancelToken;
+  StreamSubscription<TaskProgressUpdate>? _progressSub;
+  StreamSubscription<TaskStatusUpdate>? _statusSub;
 
   final _logger = Logger("DriftBackupNotifier");
+
+  @override
+  void dispose() {
+    _progressSub?.cancel();
+    _statusSub?.cancel();
+    super.dispose();
+  }
 
   /// Remove upload item from state
   void _removeUploadItem(String taskId) {
@@ -250,6 +266,70 @@ class DriftBackupNotifier extends StateNotifier<DriftBackupState> {
 
   void updateSyncing(bool isSyncing) {
     state = state.copyWith(isSyncing: isSyncing);
+  }
+
+  void _handleBackgroundTaskProgress(TaskProgressUpdate update) {
+    if (!mounted) return;
+    final taskId = update.task.taskId;
+    final progress = update.progress.clamp(0.0, 1.0);
+    final fileSize = update.expectedFileSize > 0 ? update.expectedFileSize : 0;
+    final speedMBs = update.networkSpeed;
+    final speedStr = speedMBs > 0 ? '${speedMBs.toStringAsFixed(1)} MB/s' : '';
+
+    final currentItem = state.uploadItems[taskId];
+    if (currentItem != null) {
+      state = state.copyWith(
+        uploadItems: {
+          ...state.uploadItems,
+          taskId: currentItem.copyWith(progress: progress, fileSize: fileSize, networkSpeedAsString: speedStr),
+        },
+      );
+    } else {
+      state = state.copyWith(
+        uploadItems: {
+          ...state.uploadItems,
+          taskId: DriftUploadStatus(
+            taskId: taskId,
+            filename: update.task.displayName,
+            progress: progress,
+            fileSize: fileSize,
+            networkSpeedAsString: speedStr,
+          ),
+        },
+      );
+    }
+  }
+
+  void _handleBackgroundTaskStatus(TaskStatusUpdate update) {
+    if (!mounted) return;
+    final taskId = update.task.taskId;
+    switch (update.status) {
+      case TaskStatus.complete:
+        state = state.copyWith(backupCount: state.backupCount + 1, remainderCount: state.remainderCount - 1);
+        Future.delayed(const Duration(milliseconds: 1000), () => _removeUploadItem(taskId));
+        break;
+      case TaskStatus.failed:
+      case TaskStatus.notFound:
+        final errMsg = update.exception?.description ?? 'Upload failed';
+        final currentItem = state.uploadItems[taskId];
+        state = state.copyWith(
+          uploadItems: {
+            ...state.uploadItems,
+            taskId: (currentItem ??
+                    DriftUploadStatus(
+                      taskId: taskId,
+                      filename: update.task.displayName,
+                      progress: 0,
+                      fileSize: 0,
+                      networkSpeedAsString: '',
+                    ))
+                .copyWith(isFailed: true, error: errMsg),
+          },
+        );
+        break;
+      default:
+        break;
+    }
   }
 
   Future<void> startForegroundBackup(String userId) {

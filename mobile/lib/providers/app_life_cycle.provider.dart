@@ -141,10 +141,19 @@ class AppLifeCycleNotifier extends StateNotifier<AppLifeCycleEnum> {
     if (isEnableBackup) {
       final currentUser = Store.tryGet(StoreKey.currentUser);
       if (currentUser != null) {
-        await _safeRun(
-          _ref.read(driftBackupProvider.notifier).startForegroundBackup(currentUser.id),
-          "handleBackupResume",
-        );
+        // Android uses background_downloader which persists tasks across lifecycle transitions.
+        // startBackupWithURLSession checks for active tasks and resumes them instead of restarting.
+        if (CurrentPlatform.isAndroid) {
+          await _safeRun(
+            _ref.read(driftBackupProvider.notifier).startBackupWithURLSession(currentUser.id),
+            "handleBackupResume",
+          );
+        } else {
+          await _safeRun(
+            _ref.read(driftBackupProvider.notifier).startForegroundBackup(currentUser.id),
+            "handleBackupResume",
+          );
+        }
       }
     }
   }
