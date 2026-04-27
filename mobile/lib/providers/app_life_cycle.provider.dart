@@ -69,22 +69,29 @@ class AppLifeCycleNotifier extends StateNotifier<AppLifeCycleEnum> {
     _wasPaused = false;
 
     final isAuthenticated = _ref.read(authProvider).isAuthenticated;
+    final permissionRefresh = Future.wait([
+      _ref.read(notificationPermissionProvider.notifier).getNotificationPermission(),
+      _ref.read(galleryPermissionNotifier.notifier).getGalleryPermissionStatus(),
+    ]);
 
     // Needs to be logged in
     if (isAuthenticated) {
-      // switch endpoint if needed
-      final endpoint = await _ref.read(authProvider.notifier).setOpenApiServiceEndpoint();
-      _log.info("Using server URL: $endpoint");
-
-      await _ref.read(serverInfoProvider.notifier).getServerVersion();
+      await _prepareServerConnection();
     }
 
     _ref.read(websocketProvider.notifier).connect();
-    await _handleBetaTimelineResume();
+    await Future.wait([_handleBetaTimelineResume(), permissionRefresh]);
+  }
 
-    await _ref.read(notificationPermissionProvider.notifier).getNotificationPermission();
-
-    await _ref.read(galleryPermissionNotifier.notifier).getGalleryPermissionStatus();
+  Future<void> _prepareServerConnection() async {
+    try {
+      // Switch endpoint before network sync resumes, but do not let failures abort the rest of app resume.
+      final endpoint = await _ref.read(authProvider.notifier).setOpenApiServiceEndpoint();
+      _log.info("Using server URL: $endpoint");
+      await _ref.read(serverInfoProvider.notifier).getServerVersion();
+    } catch (e, stackTrace) {
+      _log.warning("Error preparing server connection during app resume", e, stackTrace);
+    }
   }
 
   Future<void> _safeRun(Future<void> action, String debugName) async {

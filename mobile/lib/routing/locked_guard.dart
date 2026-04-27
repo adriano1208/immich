@@ -13,6 +13,8 @@ import 'package:logging/logging.dart';
 import 'package:openapi/api.dart';
 
 class LockedGuard extends AutoRouteGuard {
+  static const _serverRequestTimeout = Duration(seconds: 5);
+
   final ApiService _apiService;
   final SecureStorageService _secureStorageService;
   final LocalAuthService _localAuth;
@@ -22,32 +24,32 @@ class LockedGuard extends AutoRouteGuard {
 
   @override
   void onNavigation(NavigationResolver resolver, StackRouter router) async {
-    final authStatus = await _apiService.authenticationApi.getAuthStatus();
-
-    if (authStatus == null) {
-      resolver.next(false);
-      return;
-    }
-
-    /// Check if a pincode has been created but this user. Show the form to create if not exist
-    if (!authStatus.pinCode) {
-      unawaited(router.push(PinAuthRoute(createPinCode: true)));
-    }
-
-    if (authStatus.isElevated) {
-      resolver.next(true);
-      return;
-    }
-
-    /// Check if the user has the pincode saved in secure storage, meaning
-    /// the user has enabled the biometric authentication
-    final securePinCode = await _secureStorageService.read(kSecuredPinCode);
-    if (securePinCode == null) {
-      unawaited(router.push(PinAuthRoute()));
-      return;
-    }
-
     try {
+      final authStatus = await _apiService.authenticationApi.getAuthStatus().timeout(_serverRequestTimeout);
+
+      if (authStatus == null) {
+        resolver.next(false);
+        return;
+      }
+
+      /// Check if a pincode has been created but this user. Show the form to create if not exist
+      if (!authStatus.pinCode) {
+        unawaited(router.push(PinAuthRoute(createPinCode: true)));
+      }
+
+      if (authStatus.isElevated) {
+        resolver.next(true);
+        return;
+      }
+
+      /// Check if the user has the pincode saved in secure storage, meaning
+      /// the user has enabled the biometric authentication
+      final securePinCode = await _secureStorageService.read(kSecuredPinCode);
+      if (securePinCode == null) {
+        unawaited(router.push(PinAuthRoute()));
+        return;
+      }
+
       final bool isAuth = await _localAuth.authenticate();
 
       if (!isAuth) {
@@ -55,9 +57,14 @@ class LockedGuard extends AutoRouteGuard {
         return;
       }
 
-      await _apiService.authenticationApi.unlockAuthSession(SessionUnlockDto(pinCode: securePinCode));
+      await _apiService.authenticationApi
+          .unlockAuthSession(SessionUnlockDto(pinCode: securePinCode))
+          .timeout(_serverRequestTimeout);
 
       resolver.next(true);
+    } on TimeoutException catch (error) {
+      _log.warning("Timed out accessing locked page", error);
+      resolver.next(false);
     } on PlatformException catch (error) {
       switch (error.code) {
         case auth_error.notAvailable:

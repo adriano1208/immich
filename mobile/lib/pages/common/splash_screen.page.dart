@@ -288,7 +288,6 @@ class SplashScreenPageState extends ConsumerState<SplashScreenPage> {
   @override
   void initState() {
     super.initState();
-    unawaited(_loadConnectionInfo());
     WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(resumeSession()));
   }
 
@@ -338,6 +337,7 @@ class SplashScreenPageState extends ConsumerState<SplashScreenPage> {
       unawaited(
         Future.delayed(Duration.zero, () async {
           try {
+            await _loadConnectionInfo();
             wsProvider.connect();
             unawaited(infoProvider.getServerInfo());
 

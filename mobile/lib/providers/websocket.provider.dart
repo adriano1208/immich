@@ -43,7 +43,6 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
 
   final _log = Logger('WebsocketNotifier');
   final Ref _ref;
-  bool _manualDisconnect = false;
 
   final Debouncer _batchDebouncer = Debouncer(
     interval: const Duration(seconds: 5),
@@ -59,7 +58,6 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
 
   /// Connects websocket to server unless already connected
   void connect() {
-    _manualDisconnect = false;
     if (state.isConnected) return;
     final authenticationState = _ref.read(authProvider);
 
@@ -89,15 +87,18 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
 
         socket.onDisconnect((_) {
           dPrint(() => "Disconnect to Websocket Connection");
-          if (!_manualDisconnect) {
-            _ref.read(serverInfoProvider.notifier).markServerUnreachable();
-          }
-          _manualDisconnect = false;
+          state = const WebsocketState(isConnected: false, socket: null);
+        });
+
+        socket.on('connect_error', (errorMessage) {
+          _log.severe("Websocket Connect Error - $errorMessage");
+          _ref.read(serverInfoProvider.notifier).markServerUnreachable();
           state = const WebsocketState(isConnected: false, socket: null);
         });
 
         socket.on('error', (errorMessage) {
           _log.severe("Websocket Error - $errorMessage");
+          _ref.read(serverInfoProvider.notifier).markServerUnreachable();
           state = const WebsocketState(isConnected: false, socket: null);
         });
 
@@ -107,6 +108,7 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
         socket.on('on_new_release', _handleReleaseUpdates);
       } catch (e) {
         dPrint(() => "[WEBSOCKET] Catch Websocket Error - ${e.toString()}");
+        _ref.read(serverInfoProvider.notifier).markServerUnreachable();
       }
     }
   }
@@ -114,7 +116,6 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
   void disconnect() {
     dPrint(() => "Attempting to disconnect from websocket");
 
-    _manualDisconnect = true;
     _batchedAssetUploadReady.clear();
 
     state.socket?.dispose();
